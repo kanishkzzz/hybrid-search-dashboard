@@ -1,6 +1,6 @@
 import numpy as np
 
-from app.search.vector_index import VectorIndex
+from backend.app.search.vector_index import VectorIndex
 
 
 class FakeSentenceTransformer:
