@@ -1,6 +1,6 @@
 from __future__ import annotations
 import time
-
+from fastapi.responses import RedirectResponse
 from backend.app.db.queries import init_db, log_query
 import json
 import os
@@ -115,6 +115,9 @@ def startup() -> None:
     # Warm service container lazily (indexes are built on first /search call).
     _service.get_or_create()
 
+@app.get("/")
+def root():
+    return RedirectResponse(url="/docs")
 
 @app.get("/health")
 def health() -> dict[str, str]:
