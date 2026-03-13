@@ -1,4 +1,4 @@
-from app.search.hybrid import HybridSearch
+from backend.app.search.hybrid import HybridSearch
 
 
 class StubBM25Index:

@@ -109,9 +109,9 @@ def mrr_at_k(results: list[str], rels: dict[str, float], k: int) -> float:
 
 
 def build_hybrid_index(documents: list[dict[str, str]]):
-    from app.search.bm25 import BM25Index
-    from app.search.hybrid import HybridSearch
-    from app.search.vector_index import VectorIndex
+    from backend.app.search.bm25 import BM25Index
+    from backend.app.search.hybrid import HybridSearch
+    from backend.app.search.vector_index import VectorIndex
 
     bm25_index = BM25Index()
     vector_index = VectorIndex()

@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
-    from app.search.hybrid import HybridSearch
+    from backend.app.search.hybrid import HybridSearch
 
 DEFAULT_DOCS_PATH = Path(__file__).resolve().parents[3] / "data" / "processed" / "docs.jsonl"
 
@@ -65,9 +65,9 @@ class SearchService:
             documents = self._load_documents()
             self._documents_count = len(documents)
 
-            from app.search.bm25 import BM25Index
-            from app.search.hybrid import HybridSearch
-            from app.search.vector_index import VectorIndex
+            from backend.app.search.bm25 import BM25Index
+            from backend.app.search.hybrid import HybridSearch
+            from backend.app.search.vector_index import VectorIndex
 
             bm25_index = BM25Index()
             vector_index = VectorIndex()

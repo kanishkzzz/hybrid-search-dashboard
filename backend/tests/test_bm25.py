@@ -1,4 +1,4 @@
-from app.search.bm25 import BM25Index
+from backend.app.search.bm25 import BM25Index
 
 
 def test_bm25_ranking_order_with_three_documents() -> None:
