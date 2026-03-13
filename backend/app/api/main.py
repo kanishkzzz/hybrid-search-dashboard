@@ -1,5 +1,7 @@
 from __future__ import annotations
+import time
 
+from backend.app.db.queries import init_db, log_query
 import json
 import os
 import time
@@ -81,6 +83,7 @@ class SearchService:
 
 
 app = FastAPI(title="Hybrid Search API", version="1.0")
+init_db()
 _service = SearchService()
 
 _metrics: dict[str, Any] = {
@@ -121,13 +124,19 @@ def health() -> dict[str, str]:
 @app.post("/search")
 def search(payload: SearchRequest) -> dict[str, Any]:
     hybrid = _service.get_or_create()
+
     if _service.documents_count == 0:
         return {"query": payload.query, "results": []}
+
+    start = time.time()
 
     try:
         results = hybrid.search(query=payload.query, top_k=payload.top_k, alpha=payload.alpha)
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    latency = time.time() - start
+    log_query(payload.query, latency, len(results))
 
     return {"query": payload.query, "results": results}
 
