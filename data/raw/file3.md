@@ -1,0 +1,1 @@
+Hybrid search combines lexical search and semantic search.
