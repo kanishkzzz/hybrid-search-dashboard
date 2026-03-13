@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
 from typing import Any, TYPE_CHECKING
@@ -13,56 +11,15 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
-    from app.search.hybrid import HybridSearch
+    from backend.app.search.hybrid import HybridSearch
 
 DEFAULT_DOCS_PATH = Path(__file__).resolve().parents[3] / "data" / "processed" / "docs.jsonl"
-DEFAULT_QUERY_LOG_DB_PATH = Path(__file__).resolve().parents[3] / "data" / "logs" / "query_logs.db"
 
 
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1)
     top_k: int = Field(default=10, ge=1)
     alpha: float = Field(default=0.5, ge=0.0, le=1.0)
-
-
-class QueryLogger:
-    def __init__(self, db_path: Path) -> None:
-        self._db_path = db_path
-        self._lock = Lock()
-        self._initialize_db()
-
-    def _initialize_db(self) -> None:
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self._db_path) as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS query_logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    query_text TEXT NOT NULL,
-                    latency_ms REAL NOT NULL,
-                    timestamp TEXT NOT NULL,
-                    result_count INTEGER NOT NULL
-                )
-                """
-            )
-            conn.commit()
-
-    def log_search(self, query_text: str, latency_ms: float, result_count: int) -> None:
-        with self._lock:
-            with sqlite3.connect(self._db_path) as conn:
-                conn.execute(
-                    """
-                    INSERT INTO query_logs (query_text, latency_ms, timestamp, result_count)
-                    VALUES (?, ?, ?, ?)
-                    """,
-                    (
-                        query_text,
-                        float(latency_ms),
-                        datetime.now(timezone.utc).isoformat(),
-                        int(result_count),
-                    ),
-                )
-                conn.commit()
 
 
 class SearchService:
@@ -108,9 +65,9 @@ class SearchService:
             documents = self._load_documents()
             self._documents_count = len(documents)
 
-            from app.search.bm25 import BM25Index
-            from app.search.hybrid import HybridSearch
-            from app.search.vector_index import VectorIndex
+            from backend.app.search.bm25 import BM25Index
+            from backend.app.search.hybrid import HybridSearch
+            from backend.app.search.vector_index import VectorIndex
 
             bm25_index = BM25Index()
             vector_index = VectorIndex()
@@ -125,7 +82,6 @@ class SearchService:
 
 app = FastAPI(title="Hybrid Search API", version="1.0")
 _service = SearchService()
-_query_logger = QueryLogger(Path(os.getenv("QUERY_LOG_DB", str(DEFAULT_QUERY_LOG_DB_PATH))))
 
 _metrics: dict[str, Any] = {
     "request_count": 0,
@@ -164,24 +120,16 @@ def health() -> dict[str, str]:
 
 @app.post("/search")
 def search(payload: SearchRequest) -> dict[str, Any]:
-    start = time.perf_counter()
-    result_count = 0
+    hybrid = _service.get_or_create()
+    if _service.documents_count == 0:
+        return {"query": payload.query, "results": []}
 
     try:
-        hybrid = _service.get_or_create()
-        if _service.documents_count == 0:
-            return {"query": payload.query, "results": []}
+        results = hybrid.search(query=payload.query, top_k=payload.top_k, alpha=payload.alpha)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-        try:
-            results = hybrid.search(query=payload.query, top_k=payload.top_k, alpha=payload.alpha)
-        except ValueError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-        result_count = len(results)
-        return {"query": payload.query, "results": results}
-    finally:
-        elapsed_ms = (time.perf_counter() - start) * 1000.0
-        _query_logger.log_search(query_text=payload.query, latency_ms=elapsed_ms, result_count=result_count)
+    return {"query": payload.query, "results": results}
 
 
 @app.get("/metrics")

@@ -1,6 +1,6 @@
 import numpy as np
 
-from app.search.vector_index import VectorIndex
+from backend.app.search.vector_index import VectorIndex
 
 
 class FakeSentenceTransformer:
@@ -19,7 +19,7 @@ class FakeSentenceTransformer:
 
 
 def test_vector_index_retrieves_best_match(monkeypatch) -> None:
-    monkeypatch.setattr("app.search.vector_index.SentenceTransformer", FakeSentenceTransformer)
+    monkeypatch.setattr("backend.app.search.vector_index.SentenceTransformer", FakeSentenceTransformer)
 
     documents = [
         {"doc_id": "doc-1", "text": "apple banana"},
