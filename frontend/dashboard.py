@@ -13,6 +13,7 @@ import streamlit as st
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 DEFAULT_SQLITE_PATHS = [
     Path(os.getenv("QUERY_LOG_DB", "")) if os.getenv("QUERY_LOG_DB") else None,
+    Path("data/metrics/queries.db"),
     Path("data/logs/query_logs.db"),
     Path("data/query_logs.db"),
     Path("backend/data/query_logs.db"),
@@ -64,6 +65,9 @@ def render_search_page() -> None:
             rows = [
                 {
                     "doc_id": row.get("doc_id"),
+                    "title": row.get("title"),
+                    "source": row.get("source"),
+                    "snippet": row.get("snippet"),
                     "bm25_score": row.get("bm25_score"),
                     "vector_score": row.get("vector_score"),
                     "hybrid_score": row.get("hybrid_score"),
@@ -102,15 +106,26 @@ def _extract_kpis(logs: list[dict[str, Any]]) -> dict[str, Any]:
 
         latency = (
             row.get("latency_ms")
-            or row.get("response_time_ms")
-            or row.get("duration_ms")
-            or row.get("latency")
+            if row.get("latency_ms") is not None
+            else row.get("response_time_ms")
+            if row.get("response_time_ms") is not None
+            else row.get("duration_ms")
         )
         parsed_latency = _safe_float(latency)
+        if parsed_latency is None and row.get("latency") is not None:
+            parsed_latency = _safe_float(row.get("latency"))
+            if parsed_latency is not None:
+                parsed_latency *= 1000.0
         if parsed_latency is not None:
             latency_values.append(parsed_latency)
 
-        result_count = row.get("result_count") or row.get("results_count") or row.get("num_results")
+        result_count = (
+            row.get("result_count")
+            if row.get("result_count") is not None
+            else row.get("results_count")
+            if row.get("results_count") is not None
+            else row.get("num_results")
+        )
         parsed_result_count = _safe_float(result_count)
         if query and parsed_result_count is not None and parsed_result_count == 0:
             zero_result_queries.append(query)

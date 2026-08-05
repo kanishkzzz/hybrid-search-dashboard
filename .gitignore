@@ -3,5 +3,6 @@ __pycache__
 *.pyc
 .env
 data/index
+data/indexes
 data/processed
 node_modules

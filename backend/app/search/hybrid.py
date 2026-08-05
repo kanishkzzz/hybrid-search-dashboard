@@ -22,6 +22,24 @@ class HybridSearch:
             for doc_id, score in scores_by_doc_id.items()
         }
 
+    @staticmethod
+    def _snippet(text: str, max_length: int = 220) -> str:
+        text = " ".join(text.split())
+        if len(text) <= max_length:
+            return text
+        return text[: max_length - 3].rstrip() + "..."
+
+    def _document_metadata(self, doc_id: str) -> dict[str, str]:
+        document = self._bm25_index.get_document(doc_id) or self._vector_index.get_document(doc_id) or {}
+        text = str(document.get("text", ""))
+        return {
+            "title": str(document.get("title", "")),
+            "source": str(document.get("source", "")),
+            "parent_id": str(document.get("parent_id", document.get("doc_id", ""))),
+            "chunk_index": str(document.get("chunk_index", "")),
+            "snippet": self._snippet(text),
+        }
+
     def search(self, query: str, top_k: int, alpha: float) -> list[dict[str, float | str]]:
         bm25_results = self._bm25_index.query(query, top_k)
         vector_results = self._vector_index.query(query, top_k)
@@ -38,10 +56,11 @@ class HybridSearch:
         for doc_id in all_doc_ids:
             bm25_score = bm25_scores.get(doc_id, 0.0)
             vector_score = vector_scores.get(doc_id, 0.0)
-            hybrid_score = alpha * bm25_score + (1 - alpha) * vector_score
+            hybrid_score = alpha * vector_score + (1 - alpha) * bm25_score
             combined.append(
                 {
                     "doc_id": doc_id,
+                    **self._document_metadata(doc_id),
                     "bm25_score": bm25_score,
                     "vector_score": vector_score,
                     "hybrid_score": hybrid_score,
