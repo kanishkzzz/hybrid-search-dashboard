@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import faiss
@@ -62,3 +64,33 @@ class VectorIndex:
             )
 
         return results
+
+    def get_document(self, doc_id: str) -> dict[str, str] | None:
+        return next((doc for doc in self._documents if doc.get("doc_id") == doc_id), None)
+
+    def save(self, index_path: Path, documents_path: Path) -> None:
+        if self._index is None:
+            raise ValueError("Vector index is not built. Call build(documents) first.")
+
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        documents_path.parent.mkdir(parents=True, exist_ok=True)
+        faiss.write_index(self._index, str(index_path))
+        documents_path.write_text(
+            json.dumps(
+                {
+                    "model_name": self._model_name,
+                    "documents": self._documents,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+    @classmethod
+    def load(cls, index_path: Path, documents_path: Path) -> "VectorIndex":
+        payload = json.loads(documents_path.read_text(encoding="utf-8"))
+        index = cls(model_name=payload.get("model_name", "all-MiniLM-L6-v2"))
+        index._documents = payload["documents"]
+        index._index = faiss.read_index(str(index_path))
+        return index

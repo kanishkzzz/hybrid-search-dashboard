@@ -1,7 +1,7 @@
 from __future__ import annotations
 import time
 from fastapi.responses import RedirectResponse
-from backend.app.db.queries import init_db, log_query
+from backend.app.db.queries import init_db, log_query, query_summary
 import json
 import os
 import time
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from backend.app.search.hybrid import HybridSearch
 
 DEFAULT_DOCS_PATH = Path(__file__).resolve().parents[3] / "data" / "processed" / "docs.jsonl"
+DEFAULT_INDEX_DIR = Path(__file__).resolve().parents[3] / "data" / "indexes"
 
 
 class SearchRequest(BaseModel):
@@ -49,12 +50,32 @@ class SearchService:
                     continue
                 payload = json.loads(line)
                 doc_id = payload.get("doc_id")
-                text = payload.get("text", "")
                 if not doc_id:
                     continue
-                documents.append({"doc_id": str(doc_id), "text": str(text)})
+                documents.append(
+                    {
+                        "doc_id": str(doc_id),
+                        "parent_id": str(payload.get("parent_id", doc_id)),
+                        "chunk_index": str(payload.get("chunk_index", "")),
+                        "title": str(payload.get("title", "")),
+                        "text": str(payload.get("text", "")),
+                        "source": str(payload.get("source", "")),
+                        "created_at": str(payload.get("created_at", "")),
+                    }
+                )
 
         return documents
+
+    @staticmethod
+    def _artifacts_are_fresh(docs_path: Path) -> bool:
+        bm25_path = DEFAULT_INDEX_DIR / "bm25.pkl"
+        faiss_path = DEFAULT_INDEX_DIR / "faiss.index"
+        vector_docs_path = DEFAULT_INDEX_DIR / "vector_documents.json"
+        artifacts = [bm25_path, faiss_path, vector_docs_path]
+        if not docs_path.exists() or not all(path.exists() for path in artifacts):
+            return False
+        docs_mtime = docs_path.stat().st_mtime
+        return all(path.stat().st_mtime >= docs_mtime for path in artifacts)
 
     def get_or_create(self) -> "HybridSearch":
         if self._hybrid_search is not None:
@@ -64,6 +85,8 @@ class SearchService:
             if self._hybrid_search is not None:
                 return self._hybrid_search
 
+            configured_path = os.getenv("DOCS_JSONL_PATH")
+            docs_path = Path(configured_path) if configured_path else DEFAULT_DOCS_PATH
             documents = self._load_documents()
             self._documents_count = len(documents)
 
@@ -71,12 +94,24 @@ class SearchService:
             from backend.app.search.hybrid import HybridSearch
             from backend.app.search.vector_index import VectorIndex
 
-            bm25_index = BM25Index()
-            vector_index = VectorIndex()
+            if documents and self._artifacts_are_fresh(docs_path):
+                bm25_index = BM25Index.load(DEFAULT_INDEX_DIR / "bm25.pkl")
+                vector_index = VectorIndex.load(
+                    DEFAULT_INDEX_DIR / "faiss.index",
+                    DEFAULT_INDEX_DIR / "vector_documents.json",
+                )
+            else:
+                bm25_index = BM25Index()
+                vector_index = VectorIndex()
 
-            if documents:
+            if documents and not self._artifacts_are_fresh(docs_path):
                 bm25_index.build(documents)
                 vector_index.build(documents)
+                bm25_index.save(DEFAULT_INDEX_DIR / "bm25.pkl")
+                vector_index.save(
+                    DEFAULT_INDEX_DIR / "faiss.index",
+                    DEFAULT_INDEX_DIR / "vector_documents.json",
+                )
 
             self._hybrid_search = HybridSearch(bm25_index=bm25_index, vector_index=vector_index)
             return self._hybrid_search
@@ -154,4 +189,5 @@ def metrics() -> dict[str, Any]:
                 "min": _metrics["latency_ms"]["min"],
                 "max": _metrics["latency_ms"]["max"],
             },
+            "query_logs": query_summary(),
         }

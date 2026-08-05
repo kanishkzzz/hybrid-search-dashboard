@@ -1,320 +1,172 @@
-# Hybrid Search Dashboard — System Architecture
+# Hybrid Search Dashboard - System Architecture
 
 ## Overview
 
-This project implements a **Hybrid Search System** that combines **lexical search (BM25)** with **semantic vector search**.
-The system ingests raw documents, builds search indices, exposes a search API, evaluates retrieval quality, and provides a monitoring dashboard.
+This project is a local hybrid search system. It ingests raw text files, turns them into searchable chunks, builds lexical and semantic indexes, exposes search through FastAPI, and displays search and metrics in Streamlit.
 
-Hybrid search improves retrieval quality by combining exact keyword matching with semantic similarity.
+Hybrid retrieval combines two signals:
 
----
+- BM25 lexical search for exact keyword matching.
+- FAISS vector search for semantic similarity using SentenceTransformers.
 
-# High-Level Architecture
+## High-Level Flow
 
-```
-Raw Documents
-      │
-      ▼
-Ingestion Pipeline
-      │
-      ▼
-Processed Documents (docs.jsonl)
-      │
-      ├───────────────┐
-      │               │
-      ▼               ▼
-BM25 Index        Vector Index (FAISS)
-      │               │
-      └─────── Hybrid Search Engine ───────┘
-                      │
-                      ▼
-                FastAPI Backend
-                      │
-                      ▼
-               Streamlit Dashboard
-```
-
----
-
-# System Components
-
-## 1. Document Ingestion
-
-Location:
-
-```
-backend/app/ingest/
-```
-
-Purpose:
-
-* Read `.txt` and `.md` files from `data/raw`
-* Normalize whitespace and text formatting
-* Generate document IDs
-* Convert documents into structured format
-
-Output:
-
-```
+```text
+data/raw/*.txt, *.md
+        |
+        v
+backend/app/ingest
+        |
+        v
 data/processed/docs.jsonl
+        |
+        +--> BM25 index ----------+
+        |                         |
+        +--> FAISS vector index --+--> HybridSearch
+                                      |
+                                      v
+                              FastAPI backend
+                                      |
+                                      v
+                              Streamlit dashboard
 ```
 
-Each document contains:
+## Main Components
 
-* `doc_id`
-* `title`
-* `text`
-* `source`
-* `created_at`
+### Ingestion
 
----
+Location: `backend/app/ingest/`
 
-# 2. BM25 Index (Lexical Search)
+The ingestion pipeline reads `.txt` and `.md` files from `data/raw`, normalizes whitespace, chunks longer files, and writes JSONL records to `data/processed/docs.jsonl`.
 
-Location:
+Each record includes:
 
-```
-backend/app/search/bm25.py
-```
+- `doc_id`
+- `parent_id`
+- `chunk_index`
+- `title`
+- `text`
+- `source`
+- `created_at`
 
-Purpose:
+Single-chunk files keep the same stable `doc_id` as the source file hash. Multi-chunk files use `parent_id:chunk_index`.
 
-* Perform **keyword-based retrieval**
-* Score documents using **BM25 ranking**
+### BM25 Search
 
-BM25 considers:
+Location: `backend/app/search/bm25.py`
 
-* term frequency
-* inverse document frequency
-* document length normalization
+BM25 provides lexical retrieval. Text is lowercased and tokenized with a simple alphanumeric analyzer before ranking with `rank_bm25`.
 
-Strength:
+The BM25 artifact can be saved to:
 
-* excellent for exact keyword matching
-
-Limitation:
-
-* cannot understand semantic meaning.
-
----
-
-# 3. Vector Index (Semantic Search)
-
-Location:
-
-```
-backend/app/search/vector_index.py
+```text
+data/indexes/bm25.pkl
 ```
 
-Purpose:
+### Vector Search
 
-* Perform **semantic similarity search**
+Location: `backend/app/search/vector_index.py`
 
-Pipeline:
+Vector search embeds chunk text with `all-MiniLM-L6-v2`, normalizes embeddings, and stores them in a FAISS inner-product index.
 
-1. Encode documents using **SentenceTransformers**
-2. Generate dense embeddings
-3. Store embeddings in a **FAISS index**
-4. Perform nearest neighbor search
+Artifacts are saved to:
 
-Advantages:
-
-* retrieves semantically similar documents
-* handles paraphrased queries
-
-Limitation:
-
-* weaker for exact keyword matching.
-
----
-
-# 4. Hybrid Search Engine
-
-Location:
-
-```
-backend/app/search/hybrid.py
+```text
+data/indexes/faiss.index
+data/indexes/vector_documents.json
 ```
 
-Purpose:
+### Hybrid Search
 
-Combine BM25 and vector search scores.
+Location: `backend/app/search/hybrid.py`
 
-Formula:
+Hybrid search runs both BM25 and vector retrieval, normalizes each score stream, unions the candidate document IDs, and computes:
 
-```
+```text
 hybrid_score = alpha * vector_score + (1 - alpha) * bm25_score
 ```
 
-Where:
+`alpha` is the semantic/vector weight:
 
-* `alpha` controls weighting between semantic and lexical search.
-
-Example:
-
-| alpha | Behavior           |
-| ----- | ------------------ |
-| 0.0   | pure BM25          |
-| 1.0   | pure vector search |
-| 0.5   | balanced hybrid    |
-
----
-
-# 5. FastAPI Search Service
-
-Location:
-
-```
-backend/app/api/main.py
+```text
+0.0 = pure BM25
+0.5 = balanced hybrid
+1.0 = pure vector search
 ```
 
-Provides REST API endpoints.
+Results include document metadata and a snippet, not only scores.
+
+### FastAPI Backend
+
+Location: `backend/app/api/main.py`
 
 Endpoints:
 
-```
+```text
+GET  /
 GET  /health
 POST /search
 GET  /metrics
 ```
 
-Responsibilities:
+The API loads `data/processed/docs.jsonl`, reuses fresh persisted indexes when available, and rebuilds indexes when documents are newer than the index artifacts.
 
-* receive search queries
-* execute hybrid search
-* return ranked results
-* log search metrics.
+Search requests are logged to SQLite through `backend/app/db/queries.py`.
 
----
+### Metrics
 
-# 6. Query Logging (Metrics)
+Query logs are stored in:
 
-Location:
-
-```
-backend/app/db/queries.py
-```
-
-Stores query analytics in:
-
-```
+```text
 data/metrics/queries.db
 ```
 
-Stored fields:
+Offline evaluation metrics are appended to:
 
-* query
-* latency
-* result count
-* timestamp
-
-Used for dashboard KPIs.
-
----
-
-# 7. Evaluation Harness
-
-Location:
-
-```
-backend/app/eval/evaluate.py
-```
-
-Measures search quality using IR metrics.
-
-Metrics:
-
-* **nDCG@10**
-* **Recall@10**
-* **MRR@10**
-
-Results stored in:
-
-```
+```text
 data/metrics/experiments.csv
 ```
 
----
+The API `/metrics` endpoint includes in-memory request latency plus query-log summaries.
 
-# 8. Streamlit Dashboard
+### Evaluation
 
-Location:
+Location: `backend/app/eval/evaluate.py`
 
-```
-frontend/dashboard.py
-```
+The evaluation harness loads:
 
-Provides a user interface for:
-
-Search Page
-
-* run hybrid queries
-* tune alpha parameter
-
-KPI Page
-
-* request volume
-* p50 latency
-* p95 latency
-* top queries
-* zero-result queries
-
-Evaluation Page
-
-* visualize experiment metrics
-
-Debug Page
-
-* view logs and errors.
-
----
-
-# Technology Stack
-
-| Component       | Technology           |
-| --------------- | -------------------- |
-| Backend API     | FastAPI              |
-| Vector Search   | FAISS                |
-| Embeddings      | SentenceTransformers |
-| Lexical Search  | BM25                 |
-| Dashboard       | Streamlit            |
-| Metrics Storage | SQLite               |
-| Testing         | Pytest               |
-
----
-
-# Data Flow Summary
-
-```
-Raw Files
-   ↓
-Ingestion
-   ↓
-docs.jsonl
-   ↓
-BM25 + Vector Indices
-   ↓
-Hybrid Search
-   ↓
-FastAPI API
-   ↓
-Streamlit Dashboard
+```text
+data/eval/queries.jsonl
+data/eval/qrels.json
 ```
 
----
+It computes:
 
-# Deployment
+- `nDCG@10`
+- `Recall@10`
+- `MRR@10`
 
-The entire system can be started using:
+### Streamlit Dashboard
 
-```
+Location: `frontend/dashboard.py`
+
+Pages:
+
+- Search: sends queries to FastAPI and displays title, source, snippet, and scores.
+- KPI: reads query logs from `data/metrics/queries.db`.
+- Evaluation: displays experiment metrics from `data/metrics/experiments.csv`.
+- Debug: shows local error logs if present.
+
+## Startup
+
+Unix-like environments:
+
+```bash
 ./up.sh
 ```
 
-This script:
+Windows PowerShell:
 
-1. creates virtual environment
-2. installs dependencies
-3. runs ingestion
-4. starts FastAPI server
-5. launches Streamlit dashboard.
+```powershell
+.\up.ps1
+```

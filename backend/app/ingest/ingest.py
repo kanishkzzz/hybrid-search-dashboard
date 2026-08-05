@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 MAX_TEXT_LENGTH = 5000
+CHUNK_SIZE = 1200
+CHUNK_OVERLAP = 150
 SUPPORTED_EXTENSIONS = {".txt", ".md"}
 
 
@@ -22,21 +24,49 @@ def clean_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def build_doc(source_path: Path, input_root: Path, created_at: str) -> dict[str, str]:
+def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
+    if len(text) <= chunk_size:
+        return [text]
+
+    chunks: list[str] = []
+    start = 0
+    while start < len(text):
+        end = min(start + chunk_size, len(text))
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        if end == len(text):
+            break
+        start = max(0, end - overlap)
+
+    return chunks
+
+
+def build_docs(source_path: Path, input_root: Path, created_at: str) -> list[dict[str, str]]:
     raw_text = source_path.read_text(encoding="utf-8")
     cleaned_text = clean_whitespace(raw_text)[:MAX_TEXT_LENGTH]
     source = source_path.relative_to(input_root).as_posix()
 
-    title = cleaned_text[:80] if cleaned_text else source_path.stem
-    digest = hashlib.sha1(source.encode("utf-8")).hexdigest()[:16]
+    parent_id = hashlib.sha1(source.encode("utf-8")).hexdigest()[:16]
+    chunks = chunk_text(cleaned_text)
 
-    return {
-        "doc_id": digest,
-        "title": title,
-        "text": cleaned_text,
-        "source": source,
-        "created_at": created_at,
-    }
+    docs: list[dict[str, str]] = []
+    for chunk_index, chunk in enumerate(chunks):
+        doc_id = parent_id if len(chunks) == 1 else f"{parent_id}:{chunk_index}"
+        title = chunk[:80] if chunk else source_path.stem
+        docs.append(
+            {
+                "doc_id": doc_id,
+                "parent_id": parent_id,
+                "chunk_index": str(chunk_index),
+                "title": title,
+                "text": chunk,
+                "source": source,
+                "created_at": created_at,
+            }
+        )
+
+    return docs
 
 
 def iter_input_files(input_dir: Path) -> list[Path]:
@@ -56,8 +86,8 @@ def run(input_dir: Path, out_dir: Path) -> Path:
 
     with output_file.open("w", encoding="utf-8") as fh:
         for path in files:
-            doc = build_doc(path, input_dir, created_at)
-            fh.write(json.dumps(doc, ensure_ascii=False) + "\n")
+            for doc in build_docs(path, input_dir, created_at):
+                fh.write(json.dumps(doc, ensure_ascii=False) + "\n")
 
     return output_file
 
